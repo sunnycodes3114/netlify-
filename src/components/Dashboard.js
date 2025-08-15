@@ -52,8 +52,8 @@ const GET_CHATS = gql`
 `;
 
 const CREATE_CHAT = gql`
-  mutation CreateChat($title: String!, $userId: uuid!) {
-    insert_chats_one(object: { title: $title, user_id: $userId }) {
+  mutation CreateChat($title: String!) {
+    insert_chats_one(object: { title: $title }) {
       id
       title
       created_at
