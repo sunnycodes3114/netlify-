@@ -114,6 +114,7 @@ function Login() {
       });
       setSuccessMessage('📩 Password reset link sent! Check your email.');
     } catch (err) {
+      console.error('Password reset error:', err);
       setCustomError(err.message || 'Error sending password reset email.');
     }
   };
