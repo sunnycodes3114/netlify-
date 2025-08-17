@@ -146,9 +146,7 @@ function Login() {
 
     try {
       const { error } = await nhost.auth.resetPassword({
-        email,
-        redirectTo: 'https://beautiful-crepe-7da07b.netlify.app/change-password/',
-      });
+        email,options: {redirectTo: 'https://beautiful-crepe-7da07b.netlify.app/change-password'}});
 
       if (error) {
         setCustomError(error.message || 'Failed to send reset link.');
