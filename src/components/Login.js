@@ -147,7 +147,7 @@ function Login() {
     try {
       const { error } = await nhost.auth.resetPassword({
         email,
-        redirectTo: `${window.location.origin}/change-password`,
+        redirectTo: 'https://beautiful-crepe-7da07b.netlify.app/change-password',
       });
 
       if (error) {
