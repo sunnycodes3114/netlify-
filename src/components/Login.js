@@ -19,7 +19,7 @@ function Login() {
 
   const { signUpEmailPassword } = useSignUpEmailPassword();
   const { signInEmailPassword } = useSignInEmailPassword();
-  const { isAuthenticated } = useAuthenticationStatus();
+  const { isAuthenticated, isLoading } = useAuthenticationStatus(); // ← Added isLoading
 
   const navigate = useNavigate();
 
@@ -27,12 +27,17 @@ function Login() {
   const params = new URLSearchParams(window.location.search);
   const shouldShowSignOutAll = params.get('logout');
 
-  // Redirect only if authenticated AND not in logout mode
+  // ✅ Wait for auth to load before redirecting
   useEffect(() => {
-    if (isAuthenticated && !shouldShowSignOutAll) {
+    if (isLoading) return; // ← Prevent redirect until auth is ready
+
+    const user = nhost.auth.getUser();
+
+    // Only redirect if authenticated AND email is verified
+    if (isAuthenticated && user?.emailVerified && !shouldShowSignOutAll) {
       navigate('/dashboard', { replace: true });
     }
-  }, [isAuthenticated, navigate, shouldShowSignOutAll]);
+  }, [isAuthenticated, isLoading, navigate, shouldShowSignOutAll]);
 
   // Mouse glow effect
   useEffect(() => {
@@ -113,6 +118,13 @@ function Login() {
             setCustomError(`❌ ${error.message || 'Sign in failed.'}`);
           }
         } else {
+          // ✅ Double-check email verified before redirect
+          const user = nhost.auth.getUser();
+          if (!user?.emailVerified) {
+            setCustomError('📧 Please verify your email first. Check your inbox and spam folder.');
+            return;
+          }
+
           setSuccessMessage('✅ Signed in! Redirecting...');
           setTimeout(() => navigate('/dashboard'), 1000);
         }
@@ -172,7 +184,7 @@ function Login() {
     }
   };
 
-  // Sign out from all devices (works even if not authenticated)
+  // Sign out from all devices
   const handleSignOutAll = async () => {
     try {
       const { error } = await nhost.auth.signOut({ all: true });
@@ -382,11 +394,11 @@ function Login() {
             </div>
           )}
 
-          {/* Hint: Link to logout all */}
+          {/* Hint: Dynamic link to logout all */}
           {!shouldShowSignOutAll && (
             <p style={styles.logoutHint}>
               Forgot to log out?{' '}
-              <a href="/login?logout" style={styles.logoutLink}>
+              <a href="?logout" style={styles.logoutLink}>
                 Terminate all sessions
               </a>
             </p>
