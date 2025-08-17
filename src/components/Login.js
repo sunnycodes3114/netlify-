@@ -2,9 +2,7 @@ import React, { useState, useEffect } from 'react';
 import {
   useSignUpEmailPassword,
   useSignInEmailPassword,
-  useSignOut,
   useAuthenticationStatus,
-  useResetPassword
 } from '@nhost/react';
 import { useNavigate } from 'react-router-dom';
 import { nhost } from '../lib/nhost';
@@ -17,122 +15,176 @@ function Login() {
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
   const [customError, setCustomError] = useState(null);
   const [successMessage, setSuccessMessage] = useState(null);
+  const [resendSuccess, setResendSuccess] = useState(null);
 
-  const { signUpEmailPassword, isLoading: signUpLoading } = useSignUpEmailPassword();
-  const { signInEmailPassword, isLoading: signInLoading } = useSignInEmailPassword();
-  const { signOut } = useSignOut();
+  const { signUpEmailPassword } = useSignUpEmailPassword();
+  const { signInEmailPassword } = useSignInEmailPassword();
   const { isAuthenticated } = useAuthenticationStatus();
-  const { resetPassword, isLoading: resetLoading } = useResetPassword();
 
   const navigate = useNavigate();
 
-  // Redirect when authenticated
-  useEffect(() => {
-    if (isAuthenticated) {
-      navigate('/dashboard');
-    }
-  }, [isAuthenticated, navigate]);
+  // Get URL params
+  const params = new URLSearchParams(window.location.search);
+  const shouldShowSignOutAll = params.get('logout');
 
-  // Mouse cursor glow effect tracking
+  // Redirect only if authenticated AND not in logout mode
   useEffect(() => {
-    const handleMouseMove = (e) => setMousePosition({ x: e.clientX, y: e.clientY });
-    window.addEventListener('mousemove', handleMouseMove);
-    return () => window.removeEventListener('mousemove', handleMouseMove);
+    if (isAuthenticated && !shouldShowSignOutAll) {
+      navigate('/dashboard', { replace: true });
+    }
+  }, [isAuthenticated, navigate, shouldShowSignOutAll]);
+
+  // Mouse glow effect
+  useEffect(() => {
+    const handleMove = (e) => setMousePosition({ x: e.clientX, y: e.clientY });
+    window.addEventListener('mousemove', handleMove);
+    return () => window.removeEventListener('mousemove', handleMove);
   }, []);
 
-  // Typing animation subtitle effect
+  // Typing animation for subtitle
   useEffect(() => {
     const messages = [
       'await chatbot.connect()',
       'initializing neural networks...',
       'establishing secure connection...',
-      'ready for conversation ✨'
+      'ready for conversation ✨',
     ];
-    let messageIndex = 0;
-    let charIndex = 0;
+    let index = 0;
+    let char = 0;
 
-    const typeMessage = () => {
-      const currentMessage = messages[messageIndex];
-      setDisplayText(currentMessage.slice(0, charIndex));
-      charIndex++;
-      if (charIndex > currentMessage.length) {
+    const type = () => {
+      const msg = messages[index];
+      if (char <= msg.length) {
+        setDisplayText(msg.slice(0, char));
+        char++;
+      } else {
         setTimeout(() => {
-          charIndex = 0;
-          messageIndex = (messageIndex + 1) % messages.length;
+          char = 0;
+          index = (index + 1) % messages.length;
         }, 2000);
       }
     };
 
-    const interval = setInterval(typeMessage, 100);
+    const interval = setInterval(type, 100);
     return () => clearInterval(interval);
   }, []);
 
-  // Sign up/sign in handler
+  // Handle form submission
   const handleSubmit = async (e) => {
     e.preventDefault();
     setCustomError(null);
     setSuccessMessage(null);
 
+    if (!email || !password) {
+      setCustomError('Please fill in all fields.');
+      return;
+    }
+    if (isSignUp && password.length < 6) {
+      setCustomError('Password must be at least 6 characters long.');
+      return;
+    }
+
     try {
       if (isSignUp) {
-        const { data, error } = await signUpEmailPassword(email, password);
+        const { error } = await signUpEmailPassword(email, password);
+
         if (error) {
-          setCustomError(`${error.message} (Code: ${error.status || 'N/A'})`);
-          return;
-        }
-        if (data?.user) {
-          setSuccessMessage('✅ Sign up successful! Redirecting...');
-          navigate('/dashboard');
+          if (error.message?.includes('already exists')) {
+            setCustomError('An account with this email already exists. Please sign in instead.');
+          } else {
+            setCustomError(error.message || 'Sign up failed. Please try again.');
+          }
+        } else {
+          setSuccessMessage('A verification email has been sent!');
         }
       } else {
-        const { data, error } = await signInEmailPassword(email, password);
+        const { error } = await signInEmailPassword(email, password);
+
         if (error) {
-          setCustomError(`${error.message} (Code: ${error.status || 'N/A'})`);
-          return;
-        }
-        if (data?.user) {
-          setSuccessMessage('✅ Sign in successful! Redirecting...');
-          navigate('/dashboard');
+          const msg = (error.message || '').toLowerCase();
+
+          if (msg.includes('email not verified') || msg.includes('unverified') || msg.includes('verify')) {
+            setCustomError('📧 Your email is not verified. Please check your inbox for the verification link.');
+          } else if (msg.includes('invalid') || msg.includes('credentials')) {
+            setCustomError('❌ Invalid email or password.');
+          } else if (msg.includes('too many attempts')) {
+            setCustomError('🔒 Too many failed attempts. Try again later.');
+          } else {
+            setCustomError(`❌ ${error.message || 'Sign in failed.'}`);
+          }
+        } else {
+          setSuccessMessage('✅ Signed in! Redirecting...');
+          setTimeout(() => navigate('/dashboard'), 1000);
         }
       }
     } catch (err) {
-      setCustomError(`${err.message || 'Unknown error'}${err.status ? ` (Code: ${err.status})` : ''}`);
+      setCustomError(`❌ ${err.message || 'An unexpected error occurred.'}`);
     }
   };
 
-  // Forgot password handler
+  // Forgot password
   const handleForgotPassword = async () => {
     setCustomError(null);
     setSuccessMessage(null);
+
     if (!email) {
-      setCustomError('Please enter your email to reset password.');
+      setCustomError('Please enter your email.');
       return;
     }
+
     try {
-      await resetPassword(email, {
-        redirectTo: window.location.origin + '/change-password'
+      const { error } = await nhost.auth.resetPassword({
+        email,
+        redirectTo: `${window.location.origin}/change-password`,
       });
-      setSuccessMessage('📩 Password reset link sent! Check your email.');
+
+      if (error) {
+        setCustomError(error.message || 'Failed to send reset link.');
+      } else {
+        setSuccessMessage('📩 Password reset link sent! Check your email.');
+      }
     } catch (err) {
-      console.error('Password reset error:', err);
-      setCustomError(err.message || 'Error sending password reset email.');
+      setCustomError('Error sending reset email.');
     }
   };
 
-  // Sign out of all devices handler
-  const signOutAllDevices = async () => {
+  // Resend verification email
+  const handleResendVerification = async () => {
+    setCustomError(null);
+    setResendSuccess(null);
+
+    if (!email) {
+      setCustomError('Please enter your email to resend verification.');
+      return;
+    }
+
     try {
-      await signOut();
-      await nhost.auth.signOut({ all: true });
-      setCustomError(null);
-      setSuccessMessage('✅ Signed out of all devices.');
-      navigate('/login');
-    } catch (error) {
-      setCustomError(`Sign out failed: ${error.message || 'Unknown error'}`);
+      const { error } = await nhost.auth.sendVerificationEmail({ email });
+
+      if (error) {
+        setCustomError(error?.message || 'Failed to resend verification email.');
+      } else {
+        setResendSuccess('📧 Verification email has been resent! Check your inbox and spam folder.');
+        setTimeout(() => setResendSuccess(null), 5000);
+      }
+    } catch (err) {
+      setCustomError('Error sending verification email.');
     }
   };
 
-  // Particles generation
+  // Sign out from all devices (works even if not authenticated)
+  const handleSignOutAll = async () => {
+    try {
+      const { error } = await nhost.auth.signOut({ all: true });
+      if (error) throw error;
+
+      setSuccessMessage('✅ Signed out of all devices. You can now sign in securely.');
+    } catch (err) {
+      setCustomError(`❌ Failed to sign out: ${err.message}`);
+    }
+  };
+
+  // Floating particles
   const particles = Array.from({ length: 50 }, (_, i) => (
     <div
       key={i}
@@ -140,7 +192,7 @@ function Login() {
       style={{
         left: `${Math.random() * 100}%`,
         animationDelay: `${Math.random() * 20}s`,
-        animationDuration: `${15 + Math.random() * 10}s`
+        animationDuration: `${15 + Math.random() * 10}s`,
       }}
     />
   ));
@@ -149,11 +201,13 @@ function Login() {
     <div style={styles.container}>
       {/* Animated Background */}
       <div className="bg-animation" style={styles.bgAnimation} />
-      {/* Floating particles */}
+
+      {/* Particles */}
       <div className="particles-container" style={styles.particlesContainer}>
         {particles}
       </div>
-      {/* Cursor glow */}
+
+      {/* Cursor Glow */}
       <div
         className="cursor-glow"
         style={{
@@ -163,9 +217,9 @@ function Login() {
         }}
       />
 
-      {/* Left side: sphere + floating elements */}
+      {/* Left Side: Animated Sphere */}
       <div style={styles.leftSide}>
-        <div className="sphere-container" style={styles.sphereContainer}>
+        <div style={styles.sphereContainer}>
           <div className="sphere-ring ring-1" style={styles.sphereRing1} />
           <div className="sphere-ring ring-2" style={styles.sphereRing2} />
           <div className="sphere-ring ring-3" style={styles.sphereRing3} />
@@ -173,40 +227,39 @@ function Login() {
             <div className="sphere-core" style={styles.sphereCore} />
           </div>
         </div>
-
         <div className="floating-element elem-1" style={styles.floatingElement1} />
         <div className="floating-element elem-2" style={styles.floatingElement2} />
         <div className="floating-element elem-3" style={styles.floatingElement3} />
       </div>
 
-      {/* Right side: auth form */}
+      {/* Right Side: Auth Form */}
       <div style={styles.rightSide}>
-        <div className="form-container" style={styles.formContainer}>
+        <div style={styles.formContainer}>
           {/* Title */}
           <div className="title-container">
             <h1 style={styles.title}>
-              {'CHATBOT'.split('').map((char, i) => (
+              {Array.from('CHATBOT').map((char, i) => (
                 <span key={i} className="title-char" style={{ animationDelay: `${i * 0.1}s` }}>
                   {char}
                 </span>
               ))}
             </h1>
-            <div className="title-underline" style={styles.titleUnderline} />
+            <div style={styles.titleUnderline} />
           </div>
 
           {/* Subtitle */}
-          <div className="subtitle-container" style={styles.subtitleContainer}>
+          <div style={styles.subtitleContainer}>
             <p style={styles.subtitle}>
               {displayText}
-              <span className="cursor-blink" style={styles.cursorBlink}>|</span>
+              <span style={styles.cursorBlink}>|</span>
             </p>
           </div>
 
-          {/* Auth form */}
-          <form onSubmit={handleSubmit} style={styles.form} className="login-form">
-            {/* Email input */}
-            <div className="input-container" style={styles.inputContainer}>
-              <div className="input-icon" style={styles.inputIcon}>📧</div>
+          {/* Form */}
+          <form onSubmit={handleSubmit} style={styles.form}>
+            {/* Email Input */}
+            <div style={styles.inputContainer}>
+              <div style={styles.inputIcon}>📧</div>
               <input
                 type="email"
                 placeholder="Enter your email"
@@ -214,15 +267,14 @@ function Login() {
                 onChange={(e) => setEmail(e.target.value)}
                 required
                 style={styles.input}
-                className="animated-input"
                 autoComplete="username"
               />
-              <div className="input-line" style={styles.inputLine} />
+              <div style={styles.inputLine} />
             </div>
 
-            {/* Password input */}
-            <div className="input-container" style={styles.inputContainer}>
-              <div className="input-icon" style={styles.inputIcon}>🔐</div>
+            {/* Password Input */}
+            <div style={styles.inputContainer}>
+              <div style={styles.inputIcon}>🔐</div>
               <input
                 type="password"
                 placeholder="Enter your password"
@@ -230,24 +282,17 @@ function Login() {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 style={styles.input}
-                className="animated-input"
-                autoComplete={isSignUp ? "new-password" : "current-password"}
+                autoComplete={isSignUp ? 'new-password' : 'current-password'}
               />
-              <div className="input-line" style={styles.inputLine} />
+              <div style={styles.inputLine} />
             </div>
 
-            {/* Submit + toggle buttons */}
-            <div className="button-container" style={styles.buttonContainer}>
-              <button
-                type="submit"
-                disabled={signUpLoading || signInLoading}
-                style={styles.primaryButton}
-                className="primary-btn"
-              >
-                {signUpLoading || signInLoading ? 'Loading...' : isSignUp ? 'Create Account' : 'Launch Chat'}
-                <div className="btn-glow" style={styles.btnGlow} />
+            {/* Buttons */}
+            <div style={styles.buttonContainer}>
+              <button type="submit" style={styles.primaryButton}>
+                {isSignUp ? 'Create Account' : 'Launch Chat'}
+                <div style={styles.btnGlow} />
               </button>
-
               <button
                 type="button"
                 onClick={() => {
@@ -256,64 +301,104 @@ function Login() {
                   setSuccessMessage(null);
                 }}
                 style={styles.secondaryButton}
-                className="secondary-btn"
               >
-                {isSignUp ? '← Sign In Instead' : '✨ New User? Sign Up'}
+                {isSignUp ? '← Sign In' : '✨ Sign Up'}
               </button>
             </div>
           </form>
 
-          {/* Forgot Password Button */}
-          <button
-            type="button"
-            onClick={handleForgotPassword}
-            disabled={resetLoading}
-            style={{
-              marginTop: '10px',
-              background: 'transparent',
-              border: 'none',
-              color: '#8ab4f8',
-              textDecoration: 'underline',
-              cursor: 'pointer',
-              fontSize: '14px'
-            }}
-          >
-            {resetLoading ? 'Sending reset...' : 'Forgot Password?'}
-          </button>
+          {/* Forgot Password */}
+          {!isSignUp && (
+            <button
+              type="button"
+              onClick={handleForgotPassword}
+              style={styles.forgotPasswordButton}
+            >
+              Forgot Password?
+            </button>
+          )}
 
-          {/* Error message */}
-          {customError && (
-            <div className="error-container" style={styles.errorContainer}>
-              <p style={styles.error}>⚠️ {customError}</p>
+          {/* Success: Verification Sent */}
+          {successMessage?.includes('verification') && (
+            <div style={styles.verificationSuccess}>
+              ✅ A verification email has been sent to <strong>{email}</strong>.<br />
+              Please check your <strong>inbox and spam folder</strong> to verify your account.
+
+              <div style={{ marginTop: '12px' }}>
+                <button
+                  type="button"
+                  onClick={handleResendVerification}
+                  style={{
+                    padding: '8px 16px',
+                    fontSize: '14px',
+                    borderRadius: '8px',
+                    border: 'none',
+                    background: 'rgba(255, 255, 255, 0.2)',
+                    color: 'white',
+                    cursor: 'pointer',
+                  }}
+                >
+                  📨 Resend Verification Email
+                </button>
+              </div>
+
+              {resendSuccess && (
+                <div style={{
+                  marginTop: '10px',
+                  fontSize: '13px',
+                  color: '#69d27a',
+                  fontWeight: '500',
+                }}>
+                  {resendSuccess}
+                </div>
+              )}
             </div>
           )}
 
-          {/* Success message */}
-          {successMessage && (
-            <div style={styles.successContainer}>
+          {/* Success: Other Messages (e.g. password reset) */}
+          {successMessage && !successMessage.includes('verification') && (
+            <div style={styles.successContainer} role="status">
               {successMessage}
             </div>
           )}
 
-          {/* Sign out all devices */}
-          {isAuthenticated && (
-            <button
-              type="button"
-              onClick={signOutAllDevices}
-              style={styles.signOutButton}
-            >
-              🔒 Sign Out of All Devices
-            </button>
+          {/* Error Message */}
+          {customError && (
+            <div style={styles.errorContainer} role="alert">
+              <p style={styles.error}>{customError}</p>
+            </div>
+          )}
+
+          {/* 🔐 Sign Out of All Devices (Visible when ?logout is in URL) */}
+          {shouldShowSignOutAll && (
+            <div style={{ marginTop: '20px', textAlign: 'center' }}>
+              <button
+                type="button"
+                onClick={handleSignOutAll}
+                style={styles.signOutAllButton}
+              >
+                🔐 Sign Out of All Devices
+              </button>
+            </div>
+          )}
+
+          {/* Hint: Link to logout all */}
+          {!shouldShowSignOutAll && (
+            <p style={styles.logoutHint}>
+              Forgot to log out?{' '}
+              <a href="/login?logout" style={styles.logoutLink}>
+                Terminate all sessions
+              </a>
+            </p>
           )}
         </div>
       </div>
 
-      {/* Styled JSX with all your animations */}
+      {/* Animations */}
       <style jsx>{`
         .bg-animation {
           animation: bgShift 20s ease-in-out infinite;
-          position: absolute;
-          top: 0; left: 0; right: 0; bottom: 0;
+          position: absolute; top: 0; left: 0; right: 0; bottom: 0;
           background: radial-gradient(circle at 20% 50%, #181b20 0%, #0f0f0f 50%, #16213e 100%);
           z-index: 0;
         }
@@ -321,10 +406,10 @@ function Login() {
           0%, 100% { background: radial-gradient(circle at 20% 50%, #181b20 0%, #0f0f0f 50%, #16213e 100%); }
           50% { background: radial-gradient(circle at 80% 50%, #16213e 0%, #0f0f0f 50%, #181b20 100%); }
         }
+
         .particle {
           position: absolute;
-          width: 2px;
-          height: 2px;
+          width: 2px; height: 2px;
           background: rgba(102, 126, 234, 0.6);
           border-radius: 50%;
           animation: float linear infinite;
@@ -336,94 +421,58 @@ function Login() {
           90% { opacity: 1; }
           100% { transform: translateY(-10vh) scale(1); opacity: 0; }
         }
+
         .sphere {
-          position: relative;
-          width: 250px;
-          height: 250px;
+          width: 250px; height: 250px;
           border-radius: 50%;
           background: conic-gradient(from 0deg, #667eea 0%, #764ba2 25%, #f093fb 50%, #f5576c 75%, #667eea 100%);
           filter: blur(1px);
           box-shadow: 0 0 100px rgba(102, 126, 234, 0.6), inset 0 0 50px rgba(255, 255, 255, 0.2);
           animation: sphereRotate 15s linear infinite, spherePulse 3s ease-in-out infinite;
           margin: auto;
-          z-index: 2;
         }
-        @keyframes sphereRotate { from { transform: rotate(0deg);} to {transform: rotate(360deg);} }
-        @keyframes spherePulse { 0%,100%{transform: scale(1); filter: brightness(1);} 50% {transform: scale(1.05); filter: brightness(1.2);} }
+        @keyframes sphereRotate { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+        @keyframes spherePulse { 0%,100% { transform: scale(1); filter: brightness(1); } 50% { transform: scale(1.05); filter: brightness(1.2); } }
+
         .sphere-ring {
           position: absolute;
           border-radius: 50%;
           border: 2px solid rgba(102, 126, 234, 0.4);
-          top: 50%;
-          left: 50%;
+          top: 50%; left: 50%;
           transform: translate(-50%, -50%);
           animation: ringRotate 10s linear infinite;
           pointer-events: none;
           z-index: 1;
         }
         .ring-1 { width: 300px; height: 300px; }
-        .ring-2 {
-          width: 350px;
-          height: 350px;
-          border-color: rgba(118, 75, 162, 0.3);
-          animation-duration: 15s;
-          animation-direction: reverse;
-        }
-        .ring-3 {
-          width: 400px;
-          height: 400px;
-          border-color: rgba(240, 147, 251, 0.2);
-          animation-duration: 20s;
-        }
-        @keyframes ringRotate { from { transform: rotate(0deg) scale(1);} to { transform: rotate(360deg) scale(1.1);} }
+        .ring-2 { width: 350px; height: 350px; border-color: rgba(118,75,162,0.3); animation-duration: 15s; animation-direction: reverse; }
+        .ring-3 { width: 400px; height: 400px; border-color: rgba(240,147,251,0.2); animation-duration: 20s; }
+        @keyframes ringRotate { from { transform: scale(1); } to { transform: scale(1.1) rotate(360deg); } }
+
         .floating-element {
           position: absolute;
           border-radius: 50%;
           box-shadow: 0 0 20px #667eea;
           animation: float-random 8s ease-in-out infinite;
           pointer-events: none;
-          z-index: 1;
         }
-        .elem-1 {
-          width: 20px;
-          height: 20px;
-          top: 20%;
-          right: 10%;
-          background: linear-gradient(45deg, #667eea, #764ba2);
-          animation-delay: 0s;
-        }
-        .elem-2 {
-          width: 15px;
-          height: 15px;
-          bottom: 30%;
-          left: 15%;
-          background: linear-gradient(45deg, #f093fb, #f5576c);
-          animation-delay: -2s;
-          animation-duration: 10s;
-        }
-        .elem-3 {
-          width: 25px;
-          height: 25px;
-          top: 60%;
-          left: 20%;
-          background: linear-gradient(45deg, #764ba2, #667eea);
-          animation-delay: -4s;
-          animation-duration: 12s;
-        }
+        .elem-1 { width: 20px; height: 20px; top: 20%; right: 10%; background: linear-gradient(45deg, #667eea, #764ba2); animation-delay: 0s; }
+        .elem-2 { width: 15px; height: 15px; bottom: 30%; left: 15%; background: linear-gradient(45deg, #f093fb, #f5576c); animation-delay: -2s; animation-duration: 10s; }
+        .elem-3 { width: 25px; height: 25px; top: 60%; left: 20%; background: linear-gradient(45deg, #764ba2, #667eea); animation-delay: -4s; animation-duration: 12s; }
         @keyframes float-random {
-          0%, 100% { transform: translateY(0px) rotate(0deg);}
-          33% { transform: translateY(-20px) rotate(120deg);}
-          66% { transform: translateY(10px) rotate(240deg);}
+          0%,100% { transform: translateY(0); rotate(0deg); }
+          33% { transform: translateY(-20px) rotate(120deg); }
+          66% { transform: translateY(10px) rotate(240deg); }
         }
+
         .title-char {
           display: inline-block;
           animation: titleBounce 0.6s ease-out forwards;
           opacity: 0;
           transform: translateY(30px);
         }
-        @keyframes titleBounce {
-          to { opacity: 1; transform: translateY(0px); }
-        }
+        @keyframes titleBounce { to { opacity: 1; transform: translateY(0); } }
+
         .title-underline {
           height: 4px;
           background: linear-gradient(45deg, #667eea, #764ba2);
@@ -432,100 +481,33 @@ function Login() {
           width: 0%;
           animation: underlineGrow 2s ease-out 1s forwards;
         }
-        @keyframes underlineGrow { from { width: 0;} to { width: 100%;} }
+        @keyframes underlineGrow { from { width: 0; } to { width: 100%; } }
+
         .cursor-blink {
           animation: blink 1s infinite;
           color: #8ab4f8;
-          font-size: 20px;
           margin-left: 2px;
         }
-        @keyframes blink {
-          0%,50% { opacity: 1;}
-          51%,100% { opacity: 0;}
-        }
-        .login-form {
-          animation: formSlideIn 1s ease-out 0.5s both;
-        }
-        @keyframes formSlideIn {
-          from { transform: translateX(50px); opacity: 0;}
-          to { transform: translateX(0); opacity: 1;}
-        }
-        .animated-input:focus + .input-line {
-          animation: inputLineFocus 0.3s ease-out forwards;
-        }
-        @keyframes inputLineFocus {
-          from { transform: scaleX(0);}
-          to { transform: scaleX(1);}
-        }
-        .primary-btn:hover .btn-glow {
-          animation: btnGlowPulse 1.5s ease-in-out infinite;
-        }
-        @keyframes btnGlowPulse {
-          0%, 100% { opacity: 0.5; transform: scale(1);}
-          50% { opacity: 1; transform: scale(1.05);}
-        }
-        .secondary-btn:hover {
-          animation: btnShake 0.5s ease-in-out;
-        }
-        @keyframes btnShake {
-          0%, 100% { transform: translateX(0);}
-          25% { transform: translateX(-5px);}
-          75% { transform: translateX(5px);}
-        }
+        @keyframes blink { 0%,50% { opacity: 1; } 51%,100% { opacity: 0; } }
+
         .error-container {
           animation: errorSlideIn 0.5s ease-out;
         }
         @keyframes errorSlideIn {
-          from { transform: translateY(-20px); opacity: 0;}
-          to { transform: translateY(0); opacity: 1;}
+          from { transform: translateY(-20px); opacity: 0; }
+          to { transform: translateY(0); opacity: 1; }
         }
-        .btn-glow {
-          position: absolute;
-          top: 0;
-          left: 0;
-          right: 0;
-          bottom: 0;
-          background: linear-gradient(45deg, #667eea, #764ba2);
-          opacity: 0;
-          border-radius: 15px;
-        }
-        .error {
-          color: #ff4c4c;
-          text-align: center;
-          margin: 0;
-          font-size: 14px;
-          font-weight: bold;
-        }
-        .success-container {
-          margin-top: 20px;
-          padding: 15px;
-          background-color: rgba(0, 255, 0, 0.1);
-          border-radius: 10px;
-          border: 1px solid rgba(0, 255, 0, 0.3);
-          color: green;
-          text-align: center;
-          font-weight: bold;
-          font-size: 16px;
-        }
-        .signOutButton {
-          margin-top: 15px;
-          padding: 12px 20px;
-          border-radius: 25px;
-          border: none;
-          background: linear-gradient(45deg, #ff4e50, #f9d423);
-          color: white;
-          font-weight: bold;
-          cursor: pointer;
-          box-shadow: 0 5px 15px rgba(0,0,0,0.3);
-          width: 100%;
-          font-size: 16px;
-          user-select: none;
+
+        @keyframes fadeIn {
+          from { opacity: 0; transform: translateY(-5px); }
+          to { opacity: 1; transform: translateY(0); }
         }
       `}</style>
     </div>
   );
 }
 
+// ✅ Define styles AFTER component
 const styles = {
   container: {
     display: 'flex',
@@ -534,7 +516,7 @@ const styles = {
     overflow: 'hidden',
     backgroundColor: '#181b20',
     color: '#fafafa',
-    fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, sans-serif"
+    fontFamily: "'Inter', sans-serif",
   },
   bgAnimation: {
     position: 'absolute',
@@ -542,7 +524,7 @@ const styles = {
     left: 0,
     right: 0,
     bottom: 0,
-    zIndex: 0
+    zIndex: 0,
   },
   particlesContainer: {
     position: 'absolute',
@@ -551,7 +533,7 @@ const styles = {
     width: '100%',
     height: '100%',
     pointerEvents: 'none',
-    zIndex: 1
+    zIndex: 1,
   },
   cursorGlow: {
     position: 'absolute',
@@ -561,7 +543,7 @@ const styles = {
     borderRadius: '50%',
     pointerEvents: 'none',
     zIndex: 1,
-    transition: 'all 0.1s ease'
+    transition: 'all 0.1s ease',
   },
   leftSide: {
     flex: 1,
@@ -570,7 +552,7 @@ const styles = {
     alignItems: 'center',
     position: 'relative',
     zIndex: 2,
-    overflow: 'hidden'
+    overflow: 'hidden',
   },
   sphereContainer: {
     position: 'relative',
@@ -578,7 +560,7 @@ const styles = {
     height: '400px',
     display: 'flex',
     justifyContent: 'center',
-    alignItems: 'center'
+    alignItems: 'center',
   },
   sphereRing1: {
     position: 'absolute',
@@ -588,7 +570,7 @@ const styles = {
     border: '2px solid rgba(102, 126, 234, 0.4)',
     top: '50%',
     left: '50%',
-    transform: 'translate(-50%, -50%)'
+    transform: 'translate(-50%, -50%)',
   },
   sphereRing2: {
     position: 'absolute',
@@ -598,7 +580,7 @@ const styles = {
     border: '1px solid rgba(118, 75, 162, 0.3)',
     top: '50%',
     left: '50%',
-    transform: 'translate(-50%, -50%)'
+    transform: 'translate(-50%, -50%)',
   },
   sphereRing3: {
     position: 'absolute',
@@ -608,17 +590,16 @@ const styles = {
     border: '1px solid rgba(240, 147, 251, 0.2)',
     top: '50%',
     left: '50%',
-    transform: 'translate(-50%, -50%)'
+    transform: 'translate(-50%, -50%)',
   },
   sphere: {
     width: '250px',
     height: '250px',
     borderRadius: '50%',
     background: 'conic-gradient(from 0deg, #667eea 0%, #764ba2 25%, #f093fb 50%, #f5576c 75%, #667eea 100%)',
-    position: 'relative',
     filter: 'blur(1px)',
     boxShadow: '0 0 100px rgba(102, 126, 234, 0.6), inset 0 0 50px rgba(255, 255, 255, 0.2)',
-    animation: 'sphereRotate 15s linear infinite, spherePulse 3s ease-in-out infinite'
+    animation: 'sphereRotate 15s linear infinite, spherePulse 3s ease-in-out infinite',
   },
   sphereCore: {
     position: 'absolute',
@@ -629,7 +610,7 @@ const styles = {
     height: '100px',
     borderRadius: '50%',
     background: 'radial-gradient(circle, rgba(255, 255, 255, 0.9) 0%, transparent 70%)',
-    filter: 'blur(2px)'
+    filter: 'blur(2px)',
   },
   floatingElement1: {
     position: 'absolute',
@@ -639,7 +620,7 @@ const styles = {
     height: '20px',
     background: 'linear-gradient(45deg, #667eea, #764ba2)',
     borderRadius: '50%',
-    boxShadow: '0 0 20px rgba(102, 126, 234, 0.7)'
+    boxShadow: '0 0 20px rgba(102, 126, 234, 0.7)',
   },
   floatingElement2: {
     position: 'absolute',
@@ -649,7 +630,7 @@ const styles = {
     height: '15px',
     background: 'linear-gradient(45deg, #f093fb, #f5576c)',
     borderRadius: '50%',
-    boxShadow: '0 0 15px rgba(240, 147, 251, 0.7)'
+    boxShadow: '0 0 15px rgba(240, 147, 251, 0.7)',
   },
   floatingElement3: {
     position: 'absolute',
@@ -659,7 +640,7 @@ const styles = {
     height: '25px',
     background: 'linear-gradient(45deg, #764ba2, #667eea)',
     borderRadius: '50%',
-    boxShadow: '0 0 25px rgba(118, 75, 162, 0.7)'
+    boxShadow: '0 0 25px rgba(118, 75, 162, 0.7)',
   },
   rightSide: {
     flex: 1,
@@ -669,7 +650,7 @@ const styles = {
     padding: '40px',
     maxWidth: '600px',
     position: 'relative',
-    zIndex: 2
+    zIndex: 2,
   },
   formContainer: {
     background: 'rgba(255, 255, 255, 0.07)',
@@ -677,16 +658,16 @@ const styles = {
     padding: '40px',
     backdropFilter: 'blur(20px)',
     border: '1px solid rgba(255, 255, 255, 0.15)',
-    boxShadow: '0 20px 40px rgba(0, 0, 0, 0.4)'
+    boxShadow: '0 20px 40px rgba(0, 0, 0, 0.4)',
   },
   title: {
     fontSize: '60px',
     fontWeight: '800',
-    marginBottom: '10px',
     color: '#ffffff',
     textAlign: 'center',
     letterSpacing: '2px',
-    textShadow: '0 0 30px #667eea, 0 0 60px #764ba2'
+    textShadow: '0 0 30px #667eea, 0 0 60px #764ba2',
+    margin: 0,
   },
   titleUnderline: {
     height: '4px',
@@ -694,43 +675,43 @@ const styles = {
     borderRadius: '2px',
     marginBottom: '30px',
     width: '0%',
-    animation: 'underlineGrow 2s ease-out 1s forwards'
+    animation: 'underlineGrow 2s ease-out 1s forwards',
   },
   subtitleContainer: {
     minHeight: '60px',
     display: 'flex',
     alignItems: 'center',
-    justifyContent: 'center'
+    justifyContent: 'center',
   },
   subtitle: {
     fontSize: '20px',
     color: '#ffffff',
-    fontFamily: "'Courier New', monospace",
+    fontFamily: 'Courier New, monospace',
     textAlign: 'center',
-    minHeight: '30px'
+    minHeight: '30px',
   },
   cursorBlink: {
     color: '#8ab4f8',
     fontSize: '20px',
-    marginLeft: '2px'
+    marginLeft: '2px',
   },
   form: {
     display: 'flex',
     flexDirection: 'column',
     gap: '25px',
-    marginTop: '30px'
+    marginTop: '30px',
   },
   inputContainer: {
     position: 'relative',
     display: 'flex',
-    alignItems: 'center'
+    alignItems: 'center',
   },
   inputIcon: {
     position: 'absolute',
     left: '15px',
     fontSize: '20px',
     zIndex: 3,
-    color: '#ffffff'
+    color: '#ffffff',
   },
   input: {
     width: '100%',
@@ -742,7 +723,7 @@ const styles = {
     color: '#ffffff',
     outline: 'none',
     transition: 'all 0.3s ease',
-    backdropFilter: 'blur(10px)'
+    backdropFilter: 'blur(10px)',
   },
   inputLine: {
     position: 'absolute',
@@ -752,13 +733,13 @@ const styles = {
     background: 'linear-gradient(45deg, #667eea, #764ba2)',
     transform: 'scaleX(0)',
     transformOrigin: 'left',
-    borderRadius: '1px'
+    borderRadius: '1px',
   },
   buttonContainer: {
     display: 'flex',
     flexDirection: 'column',
     gap: '15px',
-    marginTop: '20px'
+    marginTop: '20px',
   },
   primaryButton: {
     position: 'relative',
@@ -767,12 +748,12 @@ const styles = {
     fontWeight: '600',
     borderRadius: '15px',
     border: 'none',
-    cursor: 'pointer',
     background: 'linear-gradient(45deg, #667eea, #764ba2)',
     color: 'white',
-    transition: 'all 0.3s ease',
+    cursor: 'pointer',
+    boxShadow: '0 10px 30px rgba(102, 126, 234, 0.4)',
     overflow: 'hidden',
-    boxShadow: '0 10px 30px rgba(102, 126, 234, 0.4)'
+    transition: 'all 0.3s ease',
   },
   btnGlow: {
     position: 'absolute',
@@ -782,7 +763,8 @@ const styles = {
     bottom: 0,
     background: 'linear-gradient(45deg, #667eea, #764ba2)',
     opacity: 0,
-    borderRadius: '15px'
+    borderRadius: '15px',
+    pointerEvents: 'none',
   },
   secondaryButton: {
     padding: '15px 30px',
@@ -790,25 +772,35 @@ const styles = {
     fontWeight: '500',
     borderRadius: '15px',
     border: '2px solid rgba(102, 126, 234, 0.6)',
-    cursor: 'pointer',
     backgroundColor: 'transparent',
     color: '#fff',
+    cursor: 'pointer',
+    backdropFilter: 'blur(10px)',
     transition: 'all 0.3s ease',
-    backdropFilter: 'blur(10px)'
+  },
+  forgotPasswordButton: {
+    marginTop: '10px',
+    background: 'transparent',
+    border: 'none',
+    color: '#8ab4f8',
+    textDecoration: 'underline',
+    cursor: 'pointer',
+    fontSize: '14px',
+    transition: 'color 0.3s ease',
   },
   errorContainer: {
     marginTop: '20px',
     padding: '15px',
     borderRadius: '10px',
     backgroundColor: 'rgba(255, 68, 68, 0.15)',
-    border: '1px solid rgba(255, 68, 68, 0.4)'
+    border: '1px solid rgba(255, 68, 68, 0.4)',
   },
   error: {
     color: '#ff4c4c',
     textAlign: 'center',
     margin: 0,
     fontSize: '14px',
-    fontWeight: 'bold'
+    fontWeight: 'bold',
   },
   successContainer: {
     marginTop: '20px',
@@ -819,22 +811,69 @@ const styles = {
     color: 'green',
     textAlign: 'center',
     fontWeight: 'bold',
-    fontSize: '16px'
-  },
-  signOutButton: {
-    marginTop: '15px',
-    padding: '12px 20px',
-    borderRadius: '25px',
-    border: 'none',
-    background: 'linear-gradient(45deg, #ff4e50, #f9d423)',
-    color: 'white',
-    fontWeight: 'bold',
-    cursor: 'pointer',
-    boxShadow: '0 5px 15px rgba(0,0,0,0.3)',
-    width: '100%',
     fontSize: '16px',
-    userSelect: 'none'
-  }
+  },
+  resendButton: {
+    padding: '15px 30px',
+    fontSize: '16px',
+    fontWeight: '600',
+    borderRadius: '15px',
+    border: 'none',
+    background: 'linear-gradient(45deg, #667eea, #764ba2)',
+    color: 'white',
+    cursor: 'pointer',
+    width: '100%',
+    marginBottom: '10px',
+  },
+  resendSuccessMessage: {
+    marginTop: '10px',
+    padding: '8px 12px',
+    fontSize: '13px',
+    color: '#69d27a',
+    backgroundColor: 'rgba(105, 210, 122, 0.1)',
+    borderRadius: '6px',
+    border: '1px solid rgba(105, 210, 122, 0.2)',
+    textAlign: 'center',
+    fontWeight: '500',
+    animation: 'fadeIn 0.3s ease-in',
+  },
+  signOutAllButton: {
+    padding: '14px 20px',
+    fontSize: '16px',
+    fontWeight: 'bold',
+    borderRadius: '15px',
+    border: 'none',
+    background: 'linear-gradient(45deg, #d63384, #c92a68)',
+    color: 'white',
+    cursor: 'pointer',
+    width: '100%',
+    boxShadow: '0 5px 15px rgba(214, 51, 132, 0.4)',
+    transition: 'all 0.3s ease',
+  },
+  logoutHint: {
+    textAlign: 'center',
+    fontSize: '14px',
+    color: '#ccc',
+    marginTop: '30px',
+  },
+  logoutLink: {
+    color: '#667eea',
+    textDecoration: 'underline',
+    cursor: 'pointer',
+  },
+  verificationSuccess: {
+    marginTop: '20px',
+    padding: '16px',
+    fontSize: '15px',
+    color: '#69d27a',
+    backgroundColor: 'rgba(105, 210, 122, 0.15)',
+    borderRadius: '10px',
+    border: '1px solid rgba(105, 210, 122, 0.3)',
+    textAlign: 'center',
+    fontWeight: '500',
+    lineHeight: '1.6',
+    animation: 'fadeIn 0.4s ease-in',
+  },
 };
 
 export default Login;
