@@ -1,15 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { useChangePassword } from '@nhost/react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
+import { nhost } from '../lib/nhost';
 
 export default function ChangePassword() {
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [mousePosition, setMousePosition] = useState({ x: 0, y: 0 });
   const [errorMsg, setErrorMsg] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [isSuccess, setIsSuccess] = useState(false);
+  const [isError, setIsError] = useState(false);
+  const [error, setError] = useState(null);
 
-  const { changePassword, isLoading, isSuccess, isError, error } = useChangePassword();
   const navigate = useNavigate();
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  const ticket = params.get('ticket');
 
   // Cursor glow tracking
   useEffect(() => {
@@ -18,33 +24,44 @@ export default function ChangePassword() {
     return () => window.removeEventListener('mousemove', handleMouseMove);
   }, []);
 
-  // Particles like in Login
-  const particles = Array.from({ length: 40 }, (_, i) => (
-    <div
-      key={i}
-      className="particle"
-      style={{
-        left: `${Math.random() * 100}%`,
-        animationDelay: `${Math.random() * 20}s`,
-        animationDuration: `${15 + Math.random() * 10}s`
-      }}
-    />
-  ));
-
   const handleSubmit = async (e) => {
     e.preventDefault();
     setErrorMsg(null);
+    setIsError(false);
+    setError(null);
 
     if (newPassword !== confirmPassword) {
       setErrorMsg('Passwords do not match');
       return;
     }
+    if (!ticket) {
+      setErrorMsg('Invalid or missing reset token.');
+      return;
+    }
 
-    await changePassword(newPassword);
+    setIsLoading(true);
+
+    try {
+      const { error } = await nhost.auth.changePassword({
+        newPassword,
+        ticket,
+      });
+      if (error) {
+        setIsError(true);
+        setError(error);
+      } else {
+        setIsSuccess(true);
+        setTimeout(() => navigate('/login'), 2000);
+      }
+    } catch (err) {
+      setIsError(true);
+      setError(err);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   if (isSuccess) {
-    setTimeout(() => navigate('/login'), 2000);
     return (
       <div style={styles.container}>
         <div style={styles.card}>
@@ -55,6 +72,18 @@ export default function ChangePassword() {
     );
   }
 
+  const particles = Array.from({ length: 40 }, (_, i) => (
+    <div
+      key={i}
+      className="particle"
+      style={{
+        left: `${Math.random() * 100}%`,
+        animationDelay: `${Math.random() * 20}s`,
+        animationDuration: `${15 + Math.random() * 10}s`,
+      }}
+    />
+  ));
+
   return (
     <div style={styles.container}>
       <div className="bg-animation" style={styles.bgAnimation}></div>
@@ -64,7 +93,7 @@ export default function ChangePassword() {
         style={{
           ...styles.cursorGlow,
           left: mousePosition.x - 100,
-          top: mousePosition.y - 100
+          top: mousePosition.y - 100,
         }}
       />
       <div style={styles.card}>
@@ -86,16 +115,13 @@ export default function ChangePassword() {
             required
             style={styles.input}
           />
-
           {errorMsg && <p style={{ color: 'red', fontSize: '14px' }}>{errorMsg}</p>}
           {isError && <p style={{ color: 'red', fontSize: '14px' }}>{error?.message}</p>}
-
           <button type="submit" disabled={isLoading} style={styles.button}>
             {isLoading ? 'Saving...' : 'Change Password'}
           </button>
         </form>
       </div>
-
       {/* Animations */}
       <style>{`
         .bg-animation {
@@ -135,7 +161,7 @@ const styles = {
     alignItems: 'center',
     position: 'relative',
     color: '#fff',
-    overflow: 'hidden'
+    overflow: 'hidden',
   },
   bgAnimation: { zIndex: 0 },
   cursorGlow: {
@@ -145,7 +171,7 @@ const styles = {
     background: 'radial-gradient(circle, rgba(102, 126, 234, 0.15) 0%, transparent 70%)',
     borderRadius: '50%',
     pointerEvents: 'none',
-    zIndex: 1
+    zIndex: 1,
   },
   particlesContainer: {
     position: 'absolute',
@@ -154,7 +180,7 @@ const styles = {
     width: '100%',
     height: '100%',
     pointerEvents: 'none',
-    zIndex: 1
+    zIndex: 1,
   },
   card: {
     background: 'rgba(255, 255, 255, 0.07)',
@@ -166,12 +192,12 @@ const styles = {
     zIndex: 2,
     display: 'flex',
     flexDirection: 'column',
-    gap: '1rem'
+    gap: '1rem',
   },
   title: {
     fontSize: '22px',
     fontWeight: 'bold',
-    textAlign: 'center'
+    textAlign: 'center',
   },
   text: { textAlign: 'center', fontSize: '14px', color: '#ccc' },
   form: { display: 'flex', flexDirection: 'column', gap: '1rem' },
@@ -182,7 +208,7 @@ const styles = {
     fontSize: '14px',
     background: 'rgba(255, 255, 255, 0.08)',
     color: '#fff',
-    outline: 'none'
+    outline: 'none',
   },
   button: {
     padding: '0.75rem',
@@ -192,6 +218,6 @@ const styles = {
     color: 'white',
     fontWeight: 'bold',
     fontSize: '15px',
-    cursor: 'pointer'
-  }
+    cursor: 'pointer',
+  },
 };
