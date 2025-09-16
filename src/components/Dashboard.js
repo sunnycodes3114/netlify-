@@ -170,29 +170,45 @@ export default function Dashboard() {
 
   const sendNewMessage = async () => {
     if (!message.trim() || !selectedChat) return;
-
+  
+    // Save user message in DB
     await sendMessage({ variables: { chatId: selectedChat, content: message } });
     setMessage('');
     setBotLoading(true);
-
-    fetch(N8N_WEBHOOK_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-hasura-user-id': user.id
-      },
-      body: JSON.stringify({
-        input: {
-          chat_id: selectedChat,
-          content: message
-        }
-      }),
-    }).catch((err) => {
-      console.error('Failed to trigger n8n bot:', err);
+  
+    try {
+      const response = await fetch("https://crewai-deployment.onrender.com/crew/message", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          topic: message,       // 👈 user message goes here
+          chat_id: selectedChat, // 👈 current chat id
+          bot_user_id: user.id,  // 👈 logged in user id
+        }),
+      });
+  
+      const data = await response.json();
+      console.log("API Response:", data);
+  
+      // If API returns { response: "..." }
+      if (data.response) {
+        await sendMessage({
+          variables: {
+            chatId: selectedChat,
+            content: data.response,
+            is_bot: true,
+          },
+        });
+      }
+    } catch (err) {
+      console.error("Failed to call crewai bot:", err);
+    } finally {
       setBotLoading(false);
-    });
+    }
   };
-
+  
   const handleDeleteChat = async (chatId) => {
     if (!window.confirm('Are you sure you want to delete this chat and all its messages?')) return;
     await deleteChat({ variables: { chatId } });
