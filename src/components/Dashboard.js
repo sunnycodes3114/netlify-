@@ -101,7 +101,7 @@ const SEND_MESSAGE = gql`
   }
 `;
 
-const N8N_WEBHOOK_URL = 'https://sannidhay.app.n8n.cloud/webhook/73d68716-0d4f-488b-b03c-355b47c2badb';
+
 
 export default function Dashboard() {
   const user = useUserData();
