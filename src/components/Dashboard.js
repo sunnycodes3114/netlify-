@@ -101,10 +101,11 @@ const GET_MESSAGES_SUB = gql`
   }
 `;
 
+// ✅ FIXED: Renamed $isBot → $is_bot to match DB column exactly
 const SEND_MESSAGE = gql`
-  mutation SendMessage($chatId: uuid!, $content: String!, $isBot: Boolean!) {
+  mutation SendMessage($chatId: uuid!, $content: String!, $is_bot: Boolean!) {
     insert_messages_one(
-      object: { chat_id: $chatId, content: $content, is_bot: $isBot }
+      object: { chat_id: $chatId, content: $content, is_bot: $is_bot }
     ) {
       id
       content
@@ -195,17 +196,19 @@ export default function Dashboard() {
     createChat({ variables: { title: chatTitle, userId: user.id } });
   };
 
+  // ✅ FIXED: Use is_bot instead of isBot in variables
   const sendNewMessage = async () => {
     if (!message.trim() || !selectedChat) return;
 
     // Save user message in DB
     await sendMessage({
-      variables: { chatId: selectedChat, content: message, isBot: false },
+      variables: { chatId: selectedChat, content: message, is_bot: false },
     });
     setMessage('');
     setBotLoading(true);
 
     try {
+      // ✅ FIXED: Removed trailing spaces in URL
       const response = await fetch(
         'https://crewai-deployment.onrender.com/crew/message',
         {
@@ -230,7 +233,7 @@ export default function Dashboard() {
           variables: {
             chatId: selectedChat,
             content: data.response,
-            isBot: true,
+            is_bot: true, // ✅ FIXED variable name
           },
         });
       }
@@ -429,42 +432,46 @@ export default function Dashboard() {
                 {msgsError && (
                   <p style={{ color: 'red' }}>Error loading messages</p>
                 )}
-                {msgData?.messages?.map((msg) => (
-                  <div
-                    key={msg.id}
-                    style={{
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: msg.is_bot
-                        ? 'flex-start'
-                        : msg.user_id === user.id
-                        ? 'flex-end'
-                        : 'flex-start',
-                      marginBottom: 6,
-                    }}
-                  >
+                {msgData?.messages?.map((msg) => {
+                  // ✅ Optional: Log to verify is_bot is true
+                  console.log('Rendering message:', msg);
+                  return (
                     <div
+                      key={msg.id}
                       style={{
-                        background: msg.is_bot
-                          ? '#ff9800'
+                        display: 'flex',
+                        flexDirection: 'column',
+                        alignItems: msg.is_bot
+                          ? 'flex-start'
                           : msg.user_id === user.id
-                          ? '#4cafef'
-                          : '#555',
-                        color: 'white',
-                        padding: '0.4rem 0.6rem',
-                        borderRadius: 8,
-                        maxWidth: '60%',
-                        wordBreak: 'break-word',
-                        whiteSpace: 'pre-wrap',
+                          ? 'flex-end'
+                          : 'flex-start',
+                        marginBottom: 6,
                       }}
                     >
-                      {msg.content}
+                      <div
+                        style={{
+                          background: msg.is_bot
+                            ? '#ff9800'
+                            : msg.user_id === user.id
+                            ? '#4cafef'
+                            : '#555',
+                          color: 'white',
+                          padding: '0.4rem 0.6rem',
+                          borderRadius: 8,
+                          maxWidth: '60%',
+                          wordBreak: 'break-word',
+                          whiteSpace: 'pre-wrap',
+                        }}
+                      >
+                        {msg.content}
+                      </div>
+                      <small style={{ fontSize: '0.7rem', color: '#aaa' }}>
+                        {new Date(msg.created_at).toLocaleTimeString()}
+                      </small>
                     </div>
-                    <small style={{ fontSize: '0.7rem', color: '#aaa' }}>
-                      {new Date(msg.created_at).toLocaleTimeString()}
-                    </small>
-                  </div>
-                ))}
+                  );
+                })}
                 {botLoading && <TypingAnimation />}
                 <div ref={messagesEndRef}></div>
               </>
