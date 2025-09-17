@@ -101,7 +101,6 @@ const GET_MESSAGES_SUB = gql`
   }
 `;
 
-// ✅ ADDED: Return `id` so we can track message threading
 const SEND_MESSAGE = gql`
   mutation SendMessage($chatId: uuid!, $content: String!, $is_bot: Boolean!) {
     insert_messages_one(
@@ -124,11 +123,11 @@ export default function Dashboard() {
   const [chatTitle, setChatTitle] = useState('');
   const [message, setMessage] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeUserMessageId, setActiveUserMessageId] = useState(null); // 🧵 Tracks active thread
+  const [isWaitingForFinalResponse, setIsWaitingForFinalResponse] = useState(false); // ✅ NEW
   const messagesEndRef = useRef(null);
 
   const {
-    data: chatData,
+     chatData,
     loading: chatsLoading,
     error: chatsError,
     refetch: refetchChats,
@@ -149,7 +148,7 @@ export default function Dashboard() {
     onCompleted: () => refetchChats(),
   });
 
-  const [sendMessage] = useMutation(SEND_MESSAGE); // ✅ removed unused 'sending'
+  const [sendMessage] = useMutation(SEND_MESSAGE);
 
   const {
     data: msgData,
@@ -172,39 +171,6 @@ export default function Dashboard() {
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
   }, [msgData]);
 
-  // ✅ Unlock thread when bot replies to active message — or timeout
-  useEffect(() => {
-    let timer;
-
-    if (activeUserMessageId && msgData?.messages) {
-      const userMsgIndex = msgData.messages.findIndex(
-        (msg) => msg.id === activeUserMessageId
-      );
-
-      if (userMsgIndex !== -1) {
-        const subsequentBotMessages = msgData.messages
-          .slice(userMsgIndex + 1)
-          .filter((msg) => msg.is_bot);
-
-        if (subsequentBotMessages.length > 0) {
-          // ✅ At least one bot reply received → unlock
-          setActiveUserMessageId(null);
-          console.log('✅ Bot finished replying to:', activeUserMessageId);
-        }
-      }
-    }
-
-    // ⏳ Timeout fallback: unlock after 45 seconds
-    if (activeUserMessageId) {
-      timer = setTimeout(() => {
-        setActiveUserMessageId(null);
-        console.warn('⚠️ Agent reply timed out — unlocking thread');
-      }, 45000);
-    }
-
-    return () => clearTimeout(timer);
-  }, [msgData, activeUserMessageId]);
-
   const handleSignOut = async () => {
     await signOut();
     navigate('/login');
@@ -215,33 +181,26 @@ export default function Dashboard() {
     createChat({ variables: { title: chatTitle } });
   };
 
-  // ✅ CORE LOGIC: Lock to user message until bot replies
+  // ✅ FIXED: Lock from API call start → until final response saved
   const sendNewMessage = async () => {
-    // 🚫 If there's an active thread, ignore new sends
-    if (activeUserMessageId) {
-      console.log('⚠️ Bot is still processing. Ignoring new message.');
+    // 🚫 Ignore if waiting for final response
+    if (isWaitingForFinalResponse) {
+      console.log('⚠️ Waiting for final response. Ignoring new message.');
       return;
     }
 
     if (!message.trim() || !selectedChat) return;
 
-    // 💬 Save user message and capture its ID
-    const { data } = await sendMessage({
+    // 💬 Save user message
+    await sendMessage({
       variables: { chatId: selectedChat, content: message, is_bot: false },
     });
-
-    const userMessageId = data?.insert_messages_one?.id;
-    if (!userMessageId) {
-      console.error('❌ Failed to get user message ID');
-      return;
-    }
-
-    // 🔒 Lock thread to this message
-    setActiveUserMessageId(userMessageId);
     setMessage('');
 
+    // 🔒 Lock until final response
+    setIsWaitingForFinalResponse(true);
+
     try {
-      // ✅ FIXED: No trailing spaces in URL
       const response = await fetch(
         'https://crewai-deployment.onrender.com/crew/message',
         {
@@ -260,6 +219,7 @@ export default function Dashboard() {
       const data = await response.json();
       console.log('🤖 API Response:', data);
 
+      // ✅ Save final response
       if (data.response) {
         await sendMessage({
           variables: {
@@ -271,9 +231,10 @@ export default function Dashboard() {
       }
     } catch (err) {
       console.error('❌ Failed to call crewai bot:', err);
-      // Don't unlock here — let subscription or timeout handle it
+    } finally {
+      // ✅ Always unlock
+      setIsWaitingForFinalResponse(false);
     }
-    // ❗ Do NOT unlock here — wait for bot reply via subscription
   };
 
   const handleDeleteChat = async (chatId) => {
@@ -502,7 +463,7 @@ export default function Dashboard() {
                     </div>
                   );
                 })}
-                {activeUserMessageId && <TypingAnimation />} {/* ✅ Show while locked */}
+                {isWaitingForFinalResponse && <TypingAnimation />} {/* ✅ Show while waiting */}
                 <div ref={messagesEndRef}></div>
               </>
             )}
