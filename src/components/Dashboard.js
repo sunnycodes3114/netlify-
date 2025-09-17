@@ -101,7 +101,6 @@ const GET_MESSAGES_SUB = gql`
   }
 `;
 
-// ✅ FIXED: Renamed $isBot → $is_bot to match DB column exactly
 const SEND_MESSAGE = gql`
   mutation SendMessage($chatId: uuid!, $content: String!, $is_bot: Boolean!) {
     insert_messages_one(
@@ -124,7 +123,7 @@ export default function Dashboard() {
   const [chatTitle, setChatTitle] = useState('');
   const [message, setMessage] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
-  const [botLoading, setBotLoading] = useState(false);
+  const [botLoading, setBotLoading] = useState(false); // 🟡 Tracks if bot is actively replying
   const messagesEndRef = useRef(null);
 
   const {
@@ -172,16 +171,19 @@ export default function Dashboard() {
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
   }, [msgData]);
 
-  // Hide typing animation when bot reply arrives
+  // ✅ Hide typing animation ONLY when a fresh bot message arrives
   useEffect(() => {
     if (botLoading && msgData?.messages) {
-      const lastBotMsg = msgData.messages.filter((m) => m.is_bot).slice(-1)[0];
-      if (
-        lastBotMsg &&
-        new Date(lastBotMsg.created_at) >
-          new Date(Date.now() - 5 * 60 * 1000)
-      ) {
-        setBotLoading(false);
+      const botMessages = msgData.messages.filter((m) => m.is_bot);
+      if (botMessages.length > 0) {
+        const lastBotMsg = botMessages[botMessages.length - 1];
+        // Only stop animation if message was created recently (within 5 min — avoids old chat issues)
+        if (
+          lastBotMsg &&
+          new Date(lastBotMsg.created_at) > new Date(Date.now() - 5 * 60 * 1000)
+        ) {
+          setBotLoading(false);
+        }
       }
     }
   }, [msgData, botLoading]);
@@ -193,64 +195,45 @@ export default function Dashboard() {
 
   const createNewChat = () => {
     if (!chatTitle.trim()) return;
-    createChat({ variables: { title: chatTitle, userId: user.id } });
+    createChat({ variables: { title: chatTitle } });
   };
 
-  // ✅ FIXED: Use is_bot instead of isBot in variables
+  // ✅ CORE LOGIC: Allow clicking "Send" anytime, but ignore if bot is replying
   const sendNewMessage = async () => {
-  // 🚫 If bot is still thinking, ignore all new sends
-  if (botLoading) {
-    console.log('Bot is still responding. Ignoring new message.');
-    return;
-  }
-
-  if (!message.trim() || !selectedChat) return;
-
-  // 💬 Save user message in DB
-  await sendMessage({
-    variables: { chatId: selectedChat, content: message, is_bot: false },
-  });
-  setMessage('');
-  setBotLoading(true); // 🔒 Block further sends
-
-  try {
-    // ✅ FIXED: Removed trailing spaces in URL
-    const response = await fetch(
-      'https://crewai-deployment.onrender.com/crew/message',
-      {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          topic: message, // user message
-          chat_id: selectedChat,
-          bot_user_id: user.id,
-        }),
-      }
-    );
-    
-    const data = await response.json();
-    console.log('API Response:', data);
-
-    // If API returns { response: "..." }
-    if (data.response) {
-      await sendMessage({
-        variables: {
-          chatId: selectedChat,
-          content: data.response,
-          is_bot: true,
-        },
-      });
+    // 🚫 If bot is still replying, silently ignore this send
+    if (botLoading) {
+      console.log('⚠️ Bot is still replying. Ignoring new message.');
+      return;
     }
-  } catch (err) {
-    console.error('Failed to call crewai bot:', err);
-  } finally {
-    setBotLoading(false); // ✅ Unlock sending after bot replies (or fails)
-  }
-};
+
+    if (!message.trim() || !selectedChat) return;
+
+    // 💬 Save user message in DB
+    await sendMessage({
+      variables: { chatId: selectedChat, content: message, is_bot: false },
+    });
+    setMessage('');
+    setBotLoading(true); // 🔥 Start typing animation — bot is now "thinking"
+
+    try {
+      // ✅ FIXED URL — no trailing spaces
+      const response = await fetch(
+        'https://crewai-deployment.onrender.com/crew/message',
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            topic: message,
+            chat_id: selectedChat,
+            bot_user_id: user.id,
+          }),
+        }
+      );
+
       const data = await response.json();
-      console.log('API Response:', data);
+      console.log('🤖 API Response:', data);
 
       // If API returns { response: "..." }
       if (data.response) {
@@ -258,15 +241,16 @@ export default function Dashboard() {
           variables: {
             chatId: selectedChat,
             content: data.response,
-            is_bot: true, // ✅ FIXED variable name
+            is_bot: true,
           },
         });
+        // ⏳ Typing animation will auto-hide via subscription useEffect above
       }
     } catch (err) {
-      console.error('Failed to call crewai bot:', err);
-    } finally {
-      setBotLoading(false);
+      console.error('❌ Failed to call crewai bot:', err);
+      setBotLoading(false); // Stop animation on error too
     }
+    // ❗ Do NOT setBotLoading(false) here — let subscription handle it when message appears
   };
 
   const handleDeleteChat = async (chatId) => {
@@ -458,8 +442,6 @@ export default function Dashboard() {
                   <p style={{ color: 'red' }}>Error loading messages</p>
                 )}
                 {msgData?.messages?.map((msg) => {
-                  // ✅ Optional: Log to verify is_bot is true
-                  console.log('Rendering message:', msg);
                   return (
                     <div
                       key={msg.id}
@@ -497,7 +479,7 @@ export default function Dashboard() {
                     </div>
                   );
                 })}
-                {botLoading && <TypingAnimation />}
+                {botLoading && <TypingAnimation />} {/* 🟢 Stays until bot reply confirmed */}
                 <div ref={messagesEndRef}></div>
               </>
             )}
@@ -526,15 +508,14 @@ export default function Dashboard() {
             />
             <button
               onClick={sendNewMessage}
-              disabled={sending || !selectedChat}
+              // ✅ BUTTON IS NEVER DISABLED — user can click anytime
               style={{
                 padding: '0.5rem 1rem',
                 background: '#4cafef',
                 color: 'white',
                 border: 'none',
                 borderRadius: 6,
-                cursor:
-                  sending || !selectedChat ? 'not-allowed' : 'pointer',
+                cursor: !selectedChat ? 'not-allowed' : 'pointer', // only disable if no chat selected
               }}
             >
               Send
