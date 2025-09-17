@@ -148,7 +148,7 @@ export default function Dashboard() {
     onCompleted: () => refetchChats(),
   });
 
-  const [sendMessage, { loading: sending }] = useMutation(SEND_MESSAGE);
+  const [sendMessage] = useMutation(SEND_MESSAGE);
 
   const {
     data: msgData,
