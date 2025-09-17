@@ -101,6 +101,7 @@ const GET_MESSAGES_SUB = gql`
   }
 `;
 
+// ✅ ADDED: Return `id` so we can track message threading
 const SEND_MESSAGE = gql`
   mutation SendMessage($chatId: uuid!, $content: String!, $is_bot: Boolean!) {
     insert_messages_one(
@@ -123,7 +124,7 @@ export default function Dashboard() {
   const [chatTitle, setChatTitle] = useState('');
   const [message, setMessage] = useState('');
   const [searchTerm, setSearchTerm] = useState('');
-  const [botLoading, setBotLoading] = useState(false); // 🟡 Tracks if bot is actively replying
+  const [activeUserMessageId, setActiveUserMessageId] = useState(null); // 🧵 Tracks active thread
   const messagesEndRef = useRef(null);
 
   const {
@@ -148,7 +149,7 @@ export default function Dashboard() {
     onCompleted: () => refetchChats(),
   });
 
-  const [sendMessage] = useMutation(SEND_MESSAGE);
+  const [sendMessage] = useMutation(SEND_MESSAGE); // ✅ removed unused 'sending'
 
   const {
     data: msgData,
@@ -171,22 +172,38 @@ export default function Dashboard() {
       messagesEndRef.current.scrollIntoView({ behavior: 'smooth' });
   }, [msgData]);
 
-  // ✅ Hide typing animation ONLY when a fresh bot message arrives
+  // ✅ Unlock thread when bot replies to active message — or timeout
   useEffect(() => {
-    if (botLoading && msgData?.messages) {
-      const botMessages = msgData.messages.filter((m) => m.is_bot);
-      if (botMessages.length > 0) {
-        const lastBotMsg = botMessages[botMessages.length - 1];
-        // Only stop animation if message was created recently (within 5 min — avoids old chat issues)
-        if (
-          lastBotMsg &&
-          new Date(lastBotMsg.created_at) > new Date(Date.now() - 5 * 60 * 1000)
-        ) {
-          setBotLoading(false);
+    let timer;
+
+    if (activeUserMessageId && msgData?.messages) {
+      const userMsgIndex = msgData.messages.findIndex(
+        (msg) => msg.id === activeUserMessageId
+      );
+
+      if (userMsgIndex !== -1) {
+        const subsequentBotMessages = msgData.messages
+          .slice(userMsgIndex + 1)
+          .filter((msg) => msg.is_bot);
+
+        if (subsequentBotMessages.length > 0) {
+          // ✅ At least one bot reply received → unlock
+          setActiveUserMessageId(null);
+          console.log('✅ Bot finished replying to:', activeUserMessageId);
         }
       }
     }
-  }, [msgData, botLoading]);
+
+    // ⏳ Timeout fallback: unlock after 45 seconds
+    if (activeUserMessageId) {
+      timer = setTimeout(() => {
+        setActiveUserMessageId(null);
+        console.warn('⚠️ Agent reply timed out — unlocking thread');
+      }, 45000);
+    }
+
+    return () => clearTimeout(timer);
+  }, [msgData, activeUserMessageId]);
 
   const handleSignOut = async () => {
     await signOut();
@@ -198,25 +215,33 @@ export default function Dashboard() {
     createChat({ variables: { title: chatTitle } });
   };
 
-  // ✅ CORE LOGIC: Allow clicking "Send" anytime, but ignore if bot is replying
+  // ✅ CORE LOGIC: Lock to user message until bot replies
   const sendNewMessage = async () => {
-    // 🚫 If bot is still replying, silently ignore this send
-    if (botLoading) {
-      console.log('⚠️ Bot is still replying. Ignoring new message.');
+    // 🚫 If there's an active thread, ignore new sends
+    if (activeUserMessageId) {
+      console.log('⚠️ Bot is still processing. Ignoring new message.');
       return;
     }
 
     if (!message.trim() || !selectedChat) return;
 
-    // 💬 Save user message in DB
-    await sendMessage({
+    // 💬 Save user message and capture its ID
+    const { data } = await sendMessage({
       variables: { chatId: selectedChat, content: message, is_bot: false },
     });
+
+    const userMessageId = data?.insert_messages_one?.id;
+    if (!userMessageId) {
+      console.error('❌ Failed to get user message ID');
+      return;
+    }
+
+    // 🔒 Lock thread to this message
+    setActiveUserMessageId(userMessageId);
     setMessage('');
-    setBotLoading(true); // 🔥 Start typing animation — bot is now "thinking"
 
     try {
-      // ✅ FIXED URL — no trailing spaces
+      // ✅ FIXED: No trailing spaces in URL
       const response = await fetch(
         'https://crewai-deployment.onrender.com/crew/message',
         {
@@ -235,7 +260,6 @@ export default function Dashboard() {
       const data = await response.json();
       console.log('🤖 API Response:', data);
 
-      // If API returns { response: "..." }
       if (data.response) {
         await sendMessage({
           variables: {
@@ -244,13 +268,12 @@ export default function Dashboard() {
             is_bot: true,
           },
         });
-        // ⏳ Typing animation will auto-hide via subscription useEffect above
       }
     } catch (err) {
       console.error('❌ Failed to call crewai bot:', err);
-      setBotLoading(false); // Stop animation on error too
+      // Don't unlock here — let subscription or timeout handle it
     }
-    // ❗ Do NOT setBotLoading(false) here — let subscription handle it when message appears
+    // ❗ Do NOT unlock here — wait for bot reply via subscription
   };
 
   const handleDeleteChat = async (chatId) => {
@@ -479,7 +502,7 @@ export default function Dashboard() {
                     </div>
                   );
                 })}
-                {botLoading && <TypingAnimation />} {/* 🟢 Stays until bot reply confirmed */}
+                {activeUserMessageId && <TypingAnimation />} {/* ✅ Show while locked */}
                 <div ref={messagesEndRef}></div>
               </>
             )}
@@ -508,14 +531,13 @@ export default function Dashboard() {
             />
             <button
               onClick={sendNewMessage}
-              // ✅ BUTTON IS NEVER DISABLED — user can click anytime
               style={{
                 padding: '0.5rem 1rem',
                 background: '#4cafef',
                 color: 'white',
                 border: 'none',
                 borderRadius: 6,
-                cursor: !selectedChat ? 'not-allowed' : 'pointer', // only disable if no chat selected
+                cursor: !selectedChat ? 'not-allowed' : 'pointer',
               }}
             >
               Send
