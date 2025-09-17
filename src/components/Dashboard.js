@@ -198,32 +198,57 @@ export default function Dashboard() {
 
   // ✅ FIXED: Use is_bot instead of isBot in variables
   const sendNewMessage = async () => {
-    if (!message.trim() || !selectedChat) return;
+  // 🚫 If bot is still thinking, ignore all new sends
+  if (botLoading) {
+    console.log('Bot is still responding. Ignoring new message.');
+    return;
+  }
 
-    // Save user message in DB
-    await sendMessage({
-      variables: { chatId: selectedChat, content: message, is_bot: false },
-    });
-    setMessage('');
-    setBotLoading(true);
+  if (!message.trim() || !selectedChat) return;
 
-    try {
-      // ✅ FIXED: Removed trailing spaces in URL
-      const response = await fetch(
-        'https://crewai-deployment.onrender.com/crew/message',
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            topic: message, // user message
-            chat_id: selectedChat,
-            bot_user_id: user.id,
-          }),
-        }
-      );
+  // 💬 Save user message in DB
+  await sendMessage({
+    variables: { chatId: selectedChat, content: message, is_bot: false },
+  });
+  setMessage('');
+  setBotLoading(true); // 🔒 Block further sends
 
+  try {
+    // ✅ FIXED: Removed trailing spaces in URL
+    const response = await fetch(
+      'https://crewai-deployment.onrender.com/crew/message',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          topic: message, // user message
+          chat_id: selectedChat,
+          bot_user_id: user.id,
+        }),
+      }
+    );
+    
+    const data = await response.json();
+    console.log('API Response:', data);
+
+    // If API returns { response: "..." }
+    if (data.response) {
+      await sendMessage({
+        variables: {
+          chatId: selectedChat,
+          content: data.response,
+          is_bot: true,
+        },
+      });
+    }
+  } catch (err) {
+    console.error('Failed to call crewai bot:', err);
+  } finally {
+    setBotLoading(false); // ✅ Unlock sending after bot replies (or fails)
+  }
+};
       const data = await response.json();
       console.log('API Response:', data);
 
